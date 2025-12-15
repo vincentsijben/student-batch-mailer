@@ -88,8 +88,8 @@ def create_pdf(path: Path, text: str) -> None:
 
 
 def build_roster(rows: list[tuple[str, str, str, str]], xlsx_path: Path) -> None:
-    sheet_rows = [('firstname', 'lastname', 'email', 'studentid')] + rows
-    cols = ['A', 'B', 'C', 'D']
+    sheet_rows = [('firstname', 'lastname', 'email')] + rows
+    cols = ['A', 'B', 'C']
     lines = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
@@ -155,11 +155,11 @@ def main() -> None:
 
     for idx, (first, last) in enumerate(selected, start=1):
         slug = '-'.join(filter(None, [slugify(first), slugify(last)])) or f'student-{idx:02d}'
-        pdf_path = files_dir / f"{slug}.pdf"
+        pdf_path = files_dir / f"rubric-{slug}.pdf"
         create_pdf(pdf_path, f"Feedback for {first} {last}")
-        email = f"{local_part}+{slug}-{idx:02d}@{domain}"
-        student_id = f"S{idx:04d}"
-        records.append((first, last, email, student_id))
+        alias = f"{slugify(first)}{slugify(last)}" or f"student{idx:02d}"
+        email = f"{local_part}+{alias}@{domain}"
+        records.append((first, last, email))
 
     roster_path = root / 'student-sampleset.xlsx'
     build_roster(records, roster_path)

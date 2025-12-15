@@ -7,7 +7,7 @@ Electron app for matching student feedback files to roster entries and mailing t
 To create the optional sample set run:
 
 ```
-python scripts/create_sample_set.py your.gmail+alias@gmail.com
+python3 scripts/create_sample_set.py your.gmail+alias@gmail.com
 ```
 
 - Generates 60 PDFs in `sample-set/feedback-files/`
