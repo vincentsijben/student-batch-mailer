@@ -10,5 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listTemplates: () => ipcRenderer.invoke('list-templates'),
   saveTemplate: (template) => ipcRenderer.invoke('save-template', template),
   deleteTemplate: (name) => ipcRenderer.invoke('delete-template', name),
+  expandPaths: (paths) => ipcRenderer.invoke('expand-paths', paths),
+  cacheUploadedFiles: (files) => ipcRenderer.invoke('cache-uploaded-files', files),
   onDebugMessage: (callback) => ipcRenderer.on('debug-message', callback)
 });

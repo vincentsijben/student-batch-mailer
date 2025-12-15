@@ -2,12 +2,13 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 let mainWindow;
 let logFilePath;
 let templatesPath;
 let userDataDir;
+let uploadCacheDir;
 const pendingDebugMessages = [];
 const originalConsole = {
   log: console.log,
@@ -34,6 +35,7 @@ const dutchDateFormatter = new Intl.DateTimeFormat('nl-NL', {
   hour: '2-digit',
   minute: '2-digit'
 });
+let preparedAppleScriptPath = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -174,6 +176,28 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
+function prepareOutlookAppleScript() {
+  const bundledScriptPath = path.join(__dirname, 'outlook.scpt');
+  if (!fs.existsSync(bundledScriptPath)) {
+    return null;
+  }
+  if (preparedAppleScriptPath && fs.existsSync(preparedAppleScriptPath)) {
+    return preparedAppleScriptPath;
+  }
+  try {
+    const tempDir = path.join(app.getPath('temp'), 'student-batch-mailer');
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, 'outlook.scpt');
+    const scriptContents = fs.readFileSync(bundledScriptPath, 'utf8');
+    fs.writeFileSync(tempPath, scriptContents, 'utf8');
+    preparedAppleScriptPath = tempPath;
+    return preparedAppleScriptPath;
+  } catch (error) {
+    console.error('Unable to prepare Outlook AppleScript', error);
+    return null;
+  }
+}
+
 function appendLogEntries(entries) {
   if (!entries.length || !logFilePath) {
     return;
@@ -183,12 +207,28 @@ function appendLogEntries(entries) {
   fs.writeFileSync(logFilePath, JSON.stringify(updated, null, 2), 'utf8');
 }
 
+function resetUploadCacheDir() {
+  if (!uploadCacheDir) {
+    return;
+  }
+  try {
+    if (fs.existsSync(uploadCacheDir)) {
+      fs.rmSync(uploadCacheDir, { recursive: true, force: true });
+    }
+  } catch (_) {
+    // ignore cleanup errors
+  }
+  fs.mkdirSync(uploadCacheDir, { recursive: true });
+}
+
 app.whenReady().then(() => {
   userDataDir = app.getPath('userData');
   logFilePath = path.join(userDataDir, 'sent-log.json');
   templatesPath = path.join(userDataDir, 'templates.json');
+  uploadCacheDir = path.join(userDataDir, 'upload-cache');
   ensureLogFile();
   ensureTemplatesFile();
+  resetUploadCacheDir();
   createWindow();
 });
 
@@ -204,40 +244,127 @@ app.on('activate', () => {
   }
 });
 
+function normalizeCellValue(value) {
+  if (value === null || typeof value === 'undefined') {
+    return '';
+  }
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((segment) => segment.text || '').join('');
+    }
+    if (typeof value.text !== 'undefined') {
+      return String(value.text);
+    }
+    if (typeof value.result !== 'undefined') {
+      return normalizeCellValue(value.result);
+    }
+    if (typeof value.hyperlink !== 'undefined' && typeof value.address === 'undefined') {
+      return String(value.hyperlink);
+    }
+  }
+  return String(value);
+}
+
 ipcMain.handle('parse-excel', async (_event, arrayBuffer) => {
   try {
     const buffer = Buffer.from(arrayBuffer);
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    if (!sheetName) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
       throw new Error('Workbook does not contain any sheets.');
     }
-    const worksheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
-    const requiredColumns = ['firstname', 'lastname', 'email'];
-    const normalizedRows = rows.map((row) => {
-      const hasDutchNames = Boolean(row.voornaam || row.achternaam);
+
+    const sheetValues = worksheet.getSheetValues().slice(1);
+    const normalizedSheet = sheetValues
+      .map((row) => {
+        if (!row) {
+          return null;
+        }
+        if (Array.isArray(row)) {
+          return row.slice(1).map((cell) => normalizeCellValue(cell));
+        }
+        if (typeof row === 'object') {
+          const cells = [];
+          Object.keys(row).forEach((key) => {
+            const index = Number(key);
+            if (Number.isNaN(index) || index === 0) {
+              return;
+            }
+            cells[index - 1] = normalizeCellValue(row[key]);
+          });
+          return cells;
+        }
+        return null;
+      })
+      .filter((row) => Array.isArray(row) && row.some((cell) => (cell || '').toString().trim() !== ''));
+
+    if (!normalizedSheet.length) {
+      throw new Error('Worksheet does not contain any data.');
+    }
+
+    const headerRow = normalizedSheet.shift();
+    const headerMeta = headerRow.map((header) => {
+      const text = normalizeCellValue(header).trim();
+      const lower = text.toLowerCase();
+      if (!text) {
+        return { key: null, language: null };
+      }
+      if (['voornaam'].includes(lower)) {
+        return { key: 'firstname', language: 'dutch' };
+      }
+      if (['achternaam'].includes(lower)) {
+        return { key: 'lastname', language: 'dutch' };
+      }
+      if (['firstname', 'first name'].includes(lower)) {
+        return { key: 'firstname', language: 'english' };
+      }
+      if (['lastname', 'last name'].includes(lower)) {
+        return { key: 'lastname', language: 'english' };
+      }
+      if (['email', 'email address'].includes(lower)) {
+        return { key: 'email', language: null };
+      }
+      if (['studentid', 'student id', 'id'].includes(lower)) {
+        return { key: 'studentid', language: null };
+      }
+      return { key: null, language: null };
+    });
+
+    const hasDutchHeaders = headerMeta.some((meta) => meta.language === 'dutch');
+    const records = normalizedSheet.map((row) => {
       const record = {
-        firstname: String(row.firstname || row.firstName || row.voornaam || '').trim(),
-        lastname: String(row.lastname || row.lastName || row.achternaam || '').trim(),
-        email: String(row.email || '').trim(),
-        studentid: String(row.studentid || row.studentId || '').trim(),
-        sourceLanguage: hasDutchNames ? 'dutch' : 'english'
+        firstname: '',
+        lastname: '',
+        email: '',
+        studentid: '',
+        sourceLanguage: hasDutchHeaders ? 'dutch' : 'english'
       };
+      headerMeta.forEach((meta, index) => {
+        if (!meta.key || !(meta.key in record)) {
+          return;
+        }
+        const value = normalizeCellValue(row[index]).trim();
+        if (value) {
+          record[meta.key] = value;
+        }
+      });
       const lowerValues = [record.firstname, record.lastname, record.email].map((value) => value.toLowerCase());
-      const headers = ['voornaam', 'achternaam', 'email', 'firstname', 'lastname', 'first name', 'last name'];
-      if (lowerValues.some((value) => headers.includes(value))) {
+      const headerKeywords = ['voornaam', 'achternaam', 'email', 'firstname', 'lastname', 'first name', 'last name'];
+      if (lowerValues.some((value) => headerKeywords.includes(value))) {
         return null;
       }
       return record;
     }).filter(Boolean);
+
+    const requiredColumns = ['firstname', 'lastname', 'email'];
     const missingColumns = requiredColumns.filter((column) =>
-      normalizedRows.every((row) => !row[column])
+      records.every((row) => !row[column])
     );
     if (missingColumns.length) {
       throw new Error(`Missing required column(s): ${missingColumns.join(', ')}`);
     }
-    const normalized = normalizedRows.filter(student => student.firstname || student.lastname || student.email);
+    const normalized = records.filter((student) => student.firstname || student.lastname || student.email);
     return { success: true, students: normalized };
   } catch (error) {
     return { success: false, message: error.message };
@@ -246,9 +373,9 @@ ipcMain.handle('parse-excel', async (_event, arrayBuffer) => {
 
 ipcMain.handle('send-emails', async (_event, payload) => {
   const { matches } = payload;
-  const scriptPath = path.join(__dirname, 'outlook.scpt');
-  if (!fs.existsSync(scriptPath)) {
-    return { success: false, message: 'Outlook AppleScript not found.', hasLogEntries: hasLogEntries() };
+  const scriptPath = prepareOutlookAppleScript();
+  if (!scriptPath) {
+    return { success: false, message: 'Outlook AppleScript not available.', hasLogEntries: hasLogEntries() };
   }
 
   try {
@@ -321,6 +448,93 @@ ipcMain.handle('open-user-data', async () => {
   try {
     await shell.openPath(userDataDir);
     return { success: true, path: userDataDir };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle('expand-paths', async (_event, targetPaths = []) => {
+  try {
+    if (!Array.isArray(targetPaths)) {
+      throw new Error('Invalid path list.');
+    }
+    const results = [];
+    const seen = new Set();
+    function walk(entryPath) {
+      if (!entryPath) {
+        return;
+      }
+      const resolved = path.resolve(entryPath);
+      if (seen.has(resolved)) {
+        return;
+      }
+      seen.add(resolved);
+      if (!fs.existsSync(resolved)) {
+        return;
+      }
+      const stats = fs.statSync(resolved);
+      if (stats.isDirectory()) {
+        const children = fs.readdirSync(resolved);
+        children.forEach((child) => walk(path.join(resolved, child)));
+        return;
+      }
+      if (stats.isFile()) {
+        results.push({
+          path: resolved,
+          name: path.basename(resolved)
+        });
+      }
+    }
+    targetPaths.forEach(walk);
+    return {
+      success: true,
+      files: results.sort((a, b) => a.name.localeCompare(b.name))
+    };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle('cache-uploaded-files', async (_event, files = []) => {
+  try {
+    if (!uploadCacheDir) {
+      throw new Error('Upload cache not initialized.');
+    }
+    const ensureBuffer = (data) => {
+      if (!data) {
+        return null;
+      }
+      if (Buffer.isBuffer(data)) {
+        return data;
+      }
+      if (data instanceof Uint8Array) {
+        return Buffer.from(data);
+      }
+      if (data instanceof ArrayBuffer) {
+        return Buffer.from(new Uint8Array(data));
+      }
+      return Buffer.from(data);
+    };
+    const cachedFiles = [];
+    (files || []).forEach((file) => {
+      const buffer = ensureBuffer(file && file.data);
+      if (!buffer || !buffer.length) {
+        return;
+      }
+      const safeName = (file && file.name ? path.basename(file.name) : 'file')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+        .slice(-200) || 'file';
+      const uniqueDir = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const destinationDir = path.join(uploadCacheDir, uniqueDir);
+      fs.mkdirSync(destinationDir, { recursive: true });
+      const destination = path.join(destinationDir, safeName);
+      fs.writeFileSync(destination, buffer);
+      cachedFiles.push({
+        path: destination,
+        name: file && file.name ? file.name : safeName
+      });
+    });
+    return { success: true, files: cachedFiles };
   } catch (error) {
     return { success: false, message: error.message };
   }

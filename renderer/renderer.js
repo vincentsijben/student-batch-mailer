@@ -127,31 +127,39 @@ async function handleDrop(event) {
   event.preventDefault();
   dropZone.classList.remove('dragover');
   const files = await collectDroppedFiles(event.dataTransfer);
-  addFeedbackFiles(files);
+  await addFeedbackFiles(files);
 }
 
-function handleFeedbackInputChange(event) {
+async function handleFeedbackInputChange(event) {
   const files = Array.from(event.target.files || []);
-  addFeedbackFiles(files);
+  await addFeedbackFiles(files);
   event.target.value = '';
 }
 
-function addFeedbackFiles(files) {
+async function addFeedbackFiles(files) {
   if (!files || !files.length) {
     setFeedbackStatus('No files selected.', 'error');
     return;
   }
-  const newFiles = files
-    .map((file) => ({
-      path: file.path,
-      name: file.name,
-    }))
-    .filter((file) => file.path && file.name);
-  if (!newFiles.length) {
+  const resolvedFiles = [];
+  const pendingCache = [];
+  files.forEach((file) => {
+    if (file && file.path && file.name) {
+      resolvedFiles.push({ path: file.path, name: file.name });
+    } else if (file && file.name && typeof file.arrayBuffer === 'function') {
+      pendingCache.push(file);
+    }
+  });
+  if (pendingCache.length) {
+    setFeedbackStatus('Preparing dropped files…', 'info');
+    const cached = await cacheFilesWithoutPaths(pendingCache);
+    resolvedFiles.push(...cached);
+  }
+  if (!resolvedFiles.length) {
     setFeedbackStatus('Unable to access selected files.', 'error');
     return;
   }
-  feedbackFiles = dedupeFiles(feedbackFiles.concat(newFiles));
+  feedbackFiles = dedupeFiles(feedbackFiles.concat(resolvedFiles));
   const fileCount = feedbackFiles.length;
   const label = fileCount === 1 ? 'file' : 'files';
   setFeedbackStatus(`Loaded ${fileCount} ${label}.`, 'success');
@@ -174,62 +182,47 @@ async function collectDroppedFiles(dataTransfer) {
     return [];
   }
   const items = Array.from(dataTransfer.items || []);
-  const entryPromises = items.map(async (item) => {
-    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-    if (!entry) {
-      const file = item.getAsFile ? item.getAsFile() : null;
-      return file ? [file] : [];
+  if (items.length) {
+    const entryPromises = items.map(async (item) => {
+      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      if (!entry) {
+        const file = item.getAsFile ? item.getAsFile() : null;
+        return file ? [file] : [];
+      }
+      return entryToFiles(entry);
+    });
+    const nestedEntries = await Promise.all(entryPromises);
+    const flattened = nestedEntries.flat().filter(Boolean);
+    if (flattened.length) {
+      return flattened;
     }
-    return entryToFiles(entry);
-  });
-  if (!entryPromises.length) {
-    return Array.from(dataTransfer.files || []);
   }
-  const nested = await Promise.all(entryPromises);
-  const flattened = nested.flat().filter(Boolean);
-  if (flattened.length) {
-    return flattened;
-  }
-  return Array.from(dataTransfer.files || []);
-}
-
-async function entryToFiles(entry) {
-  if (entry.isFile) {
-    return [await getFileFromEntry(entry)].filter(Boolean);
-  }
-  if (entry.isDirectory) {
-    const reader = entry.createReader();
-    const entries = await readAllDirectoryEntries(reader);
-    const childFiles = await Promise.all(entries.map(entryToFiles));
-    return childFiles.flat();
-  }
-  return [];
-}
-
-function readAllDirectoryEntries(reader) {
-  return new Promise((resolve) => {
-    const entries = [];
-    function readBatch() {
-      reader.readEntries((batch) => {
-        if (!batch.length) {
-          resolve(entries);
-          return;
+  const fileList = Array.from(dataTransfer.files || []);
+  const usable = fileList.filter((file) => Boolean(file.path));
+  const needsExpansion = !fileList.length || usable.length !== fileList.length;
+  let expanded = [];
+  if (needsExpansion) {
+    const uriPaths = extractFilePaths(dataTransfer);
+    if (uriPaths.length && window.electronAPI.expandPaths) {
+      try {
+        const response = await window.electronAPI.expandPaths(uriPaths);
+        if (response.success && Array.isArray(response.files)) {
+          expanded = response.files.map((file) => ({
+            path: file.path,
+            name: file.name
+          }));
+        } else if (response.message) {
+          console.warn('Unable to expand dropped items:', response.message);
         }
-        entries.push(...batch);
-        readBatch();
-      }, () => resolve(entries));
+      } catch (error) {
+        console.error('Failed to expand dropped items:', error);
+      }
     }
-    readBatch();
-  });
-}
-
-function getFileFromEntry(entry) {
-  return new Promise((resolve) => {
-    entry.file(
-      (file) => resolve(file),
-      () => resolve(null)
-    );
-  });
+  }
+  if (usable.length || expanded.length) {
+    return usable.concat(expanded);
+  }
+  return fileList;
 }
 
 function renderFileList() {
@@ -709,4 +702,89 @@ function normalizeBodyText(text) {
   let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
   return normalized.replace(/\n/g, '\r');
+}
+
+function extractFilePaths(dataTransfer) {
+  if (!dataTransfer || typeof dataTransfer.getData !== 'function') {
+    return [];
+  }
+  const raw = dataTransfer.getData('text/uri-list') || '';
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.startsWith('file://'))
+    .map((line) => {
+      try {
+        const url = new URL(line);
+        return decodeURI(url.pathname);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function cacheFilesWithoutPaths(fileList) {
+  if (!window.electronAPI || typeof window.electronAPI.cacheUploadedFiles !== 'function') {
+    return [];
+  }
+  try {
+    const payload = await Promise.all(
+      fileList.map(async (file) => ({
+        name: file.name || 'file',
+        data: await file.arrayBuffer()
+      }))
+    );
+    const response = await window.electronAPI.cacheUploadedFiles(payload);
+    if (response.success && Array.isArray(response.files)) {
+      return response.files;
+    }
+    if (response.message) {
+      console.error('Cache upload failed:', response.message);
+    }
+    return [];
+  } catch (error) {
+    console.error('Cache upload error:', error);
+    return [];
+  }
+}
+
+async function entryToFiles(entry) {
+  if (entry.isFile) {
+    const file = await getFileFromEntry(entry);
+    return file ? [file] : [];
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const entries = await readAllDirectoryEntries(reader);
+    const childFiles = await Promise.all(entries.map(entryToFiles));
+    return childFiles.flat();
+  }
+  return [];
+}
+
+function readAllDirectoryEntries(reader) {
+  return new Promise((resolve) => {
+    const entries = [];
+    function readBatch() {
+      reader.readEntries((batch) => {
+        if (!batch.length) {
+          resolve(entries);
+          return;
+        }
+        entries.push(...batch);
+        readBatch();
+      }, () => resolve(entries));
+    }
+    readBatch();
+  });
+}
+
+function getFileFromEntry(entry) {
+  return new Promise((resolve) => {
+    entry.file(
+      (file) => resolve(file),
+      () => resolve(null)
+    );
+  });
 }
