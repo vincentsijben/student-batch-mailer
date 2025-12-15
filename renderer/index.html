@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Student Feedback Mailer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Student Batch Mailer</h1>
+    <p class="info-note">
+      Files are matched only when the lowercase first- and last-name tokens all appear in the filename (order does not matter).
+      Example: “Vincent” + “Broek, van de” will match any filename containing vincent/van/de/broek in any order.<br /><br />
+      Roster columns required: firstname, lastname, email.
+    </p>
+    <section class="inputs">
+      <div class="card">
+        <label for="excel-input">1. Upload student roster (.xlsx)</label>
+        <input id="excel-input" type="file" accept=".xlsx" class="sr-only" />
+        <div id="excel-drop-zone" class="drop-zone">Click to browse or drop roster (.xlsx)</div>
+        <p id="roster-status" class="status-note">No roster loaded yet.</p>
+        <div id="roster-preview" class="roster-preview">
+          <p class="placeholder">No roster loaded yet.</p>
+        </div>
+      </div>
+      <div class="card">
+        <label>2. Drag &amp; drop files</label>
+        <input id="feedback-input" type="file" multiple class="sr-only" />
+        <div id="drop-zone" class="drop-zone">Click to browse or drop files</div>
+        <p id="feedback-status" class="status-note">No files loaded yet.</p>
+        <ul id="file-list"></ul>
+      </div>
+    </section>
+
+    <section class="email-settings card">
+      <label>Subject</label>
+      <input id="subject" type="text" placeholder="Feedback for {{firstname}} {{lastname}}" />
+      <label>Body</label>
+      <textarea id="body" rows="4" placeholder="Hello {{firstname}},\nPlease find your feedback attached."></textarea>
+      <div class="template-controls">
+        <div class="template-save">
+          <input id="template-name" type="text" placeholder="Template name (e.g., Rubric)" />
+          <button id="save-template-btn" type="button">Save template</button>
+        </div>
+        <div id="template-buttons" class="template-buttons">
+          <p class="placeholder">No templates saved yet.</p>
+        </div>
+        <p id="template-status" class="template-status"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="table-header">
+        <h2>Matches</h2>
+        <div class="match-actions">
+          <button id="send-btn" disabled>Send emails to checked students</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Student</th>
+            <th>Email</th>
+            <th>Matched file</th>
+            <th class="send-column">
+              <label class="select-all">
+                <input type="checkbox" id="select-all-matches" checked />
+                Select all
+              </label>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="match-body"></tbody>
+      </table>
+      <p id="status"></p>
+    </section>
+
+    <section class="advanced-actions card">
+      <h3>Advanced actions</h3>
+      <div class="advanced-buttons">
+        <button id="open-data-btn" type="button">Open data folder</button>
+        <button id="clear-log-btn" class="danger" type="button" disabled>Clear sent log</button>
+        <button id="export-log-btn" type="button" disabled>Export sent log</button>
+      </div>
+    </section>
+
+  </main>
+  <script src="renderer.js" type="module"></script>
+</body>
+</html>
