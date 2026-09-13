@@ -5,7 +5,7 @@ const fs = require('fs');
 const ExcelJS = require('exceljs');
 
 let mainWindow;
-let logFilePath;
+let sentLogsDir;
 let templatesPath;
 let userDataDir;
 let uploadCacheDir;
@@ -59,19 +59,6 @@ function createWindow() {
   });
 }
 
-function ensureLogFile() {
-  if (!logFilePath) {
-    return;
-  }
-  const dir = path.dirname(logFilePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (!fs.existsSync(logFilePath)) {
-    fs.writeFileSync(logFilePath, '[]', 'utf8');
-  }
-}
-
 function ensureTemplatesFile() {
   if (!templatesPath) {
     return;
@@ -85,20 +72,136 @@ function ensureTemplatesFile() {
   }
 }
 
-function readLogEntries() {
-  if (!logFilePath) {
-    return [];
+function hasSentLogs() {
+  if (!sentLogsDir || !fs.existsSync(sentLogsDir)) {
+    return false;
   }
   try {
-    const raw = fs.readFileSync(logFilePath, 'utf8');
-    return JSON.parse(raw);
+    return fs.readdirSync(sentLogsDir).some((name) => name.endsWith('.html'));
   } catch {
-    return [];
+    return false;
   }
 }
 
-function hasLogEntries() {
-  return readLogEntries().length > 0;
+function formatLogTimestampForFileName(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
+// Copies the report stylesheet into <sent-logs>/css/style.css so every report
+// links to one shared file. Re-copied on each run so style updates propagate.
+function ensureSentLogStylesheet() {
+  if (!sentLogsDir) {
+    return;
+  }
+  try {
+    const source = path.join(__dirname, 'report', 'style.css');
+    const cssDir = path.join(sentLogsDir, 'css');
+    fs.mkdirSync(cssDir, { recursive: true });
+    fs.copyFileSync(source, path.join(cssDir, 'style.css'));
+  } catch (error) {
+    console.error('Unable to copy report stylesheet', error);
+  }
+}
+
+function studentLabel(record) {
+  return `${record.firstname || ''} ${record.lastname || ''}`.trim() || record.email || '—';
+}
+
+function renderStudentTable(rows, { withFile = true, withTime = false } = {}) {
+  if (!rows.length) {
+    return '<p class="empty">None</p>';
+  }
+  const head = [
+    withTime ? '<th>Time</th>' : '',
+    '<th>Student</th>',
+    '<th>Email</th>',
+    withFile ? '<th>Attachment</th>' : ''
+  ].join('');
+  const body = rows.map((row) => [
+    '<tr>',
+    withTime ? `<td class="time">${escapeHtml(row.timestamp ? dutchDateFormatter.format(new Date(row.timestamp)) : '')}</td>` : '',
+    `<td class="student">${escapeHtml(studentLabel(row))}${row.studentid ? ` <span class="muted">(${escapeHtml(row.studentid)})</span>` : ''}</td>`,
+    `<td><a href="mailto:${escapeHtml(row.email || '')}">${escapeHtml(row.email || '')}</a></td>`,
+    withFile ? `<td class="file">${escapeHtml(row.fileName || '')}</td>` : '',
+    '</tr>'
+  ].join('')).join('\n');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Writes one HTML report per send action into the sent-logs folder.
+function writeSentLog(entries, report = {}, failure = null) {
+  if (!sentLogsDir) {
+    return null;
+  }
+  const skipped = Array.isArray(report.skipped) ? report.skipped : [];
+  const unmatchedStudents = Array.isArray(report.unmatchedStudents) ? report.unmatchedStudents : [];
+  const unmatchedFiles = Array.isArray(report.unmatchedFiles) ? report.unmatchedFiles : [];
+  if (!entries.length && !failure) {
+    return null;
+  }
+  fs.mkdirSync(sentLogsDir, { recursive: true });
+  ensureSentLogStylesheet();
+
+  const now = new Date();
+  const fileStamp = formatLogTimestampForFileName(now);
+  const filePath = path.join(sentLogsDir, `sent-${fileStamp}.html`);
+  const title = `Sent emails – ${dutchDateFormatter.format(now)}`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  const summaryItems = [
+    `<li class="ok"><strong>${entries.length}</strong> sent</li>`,
+    `<li class="${skipped.length ? 'warn' : ''}"><strong>${skipped.length}</strong> matched but unchecked</li>`,
+    `<li class="${unmatchedStudents.length ? 'warn' : ''}"><strong>${unmatchedStudents.length}</strong> without a file</li>`,
+    `<li class="${unmatchedFiles.length ? 'warn' : ''}"><strong>${unmatchedFiles.length}</strong> file${unmatchedFiles.length === 1 ? '' : 's'} without a student</li>`
+  ].join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Student Batch Mailer – send report</h1>
+    <p class="meta">${escapeHtml(dutchDateFormatter.format(now))}${report.subjectTemplate ? ` · Subject: <em>${escapeHtml(report.subjectTemplate)}</em>` : ''}</p>
+    ${failure ? `<p class="failure">⚠ Sending stopped with an error: ${escapeHtml(failure)}. The emails listed under “Sent” went out before the error.</p>` : ''}
+    <ul class="summary">${summaryItems}</ul>
+  </header>
+
+  <section>
+    <h2><span class="dot ok"></span>Sent <span class="count">${plural(entries.length, 'email')}</span></h2>
+    ${renderStudentTable(entries, { withFile: true, withTime: true })}
+  </section>
+
+  <section>
+    <h2><span class="dot warn"></span>Matched but not sent (unchecked) <span class="count">${plural(skipped.length, 'student')}</span></h2>
+    ${renderStudentTable(skipped, { withFile: true })}
+  </section>
+
+  <section>
+    <h2><span class="dot warn"></span>Students without a matching file <span class="count">${plural(unmatchedStudents.length, 'student')}</span></h2>
+    ${renderStudentTable(unmatchedStudents, { withFile: false })}
+  </section>
+
+  <section>
+    <h2><span class="dot muted"></span>Files without a matching student <span class="count">${plural(unmatchedFiles.length, 'file')}</span></h2>
+    ${unmatchedFiles.length
+      ? `<ul class="files">${unmatchedFiles.map((name) => `<li>${escapeHtml(name)}</li>`).join('')}</ul>`
+      : '<p class="empty">None</p>'}
+  </section>
+
+  <footer>Generated by Student Batch Mailer · ${escapeHtml(path.basename(filePath))}</footer>
+</main>
+</body>
+</html>
+`;
+  fs.writeFileSync(filePath, html, 'utf8');
+  return filePath;
 }
 
 function readTemplates() {
@@ -198,15 +301,6 @@ function prepareOutlookAppleScript() {
   }
 }
 
-function appendLogEntries(entries) {
-  if (!entries.length || !logFilePath) {
-    return;
-  }
-  const current = readLogEntries();
-  const updated = current.concat(entries);
-  fs.writeFileSync(logFilePath, JSON.stringify(updated, null, 2), 'utf8');
-}
-
 function resetUploadCacheDir() {
   if (!uploadCacheDir) {
     return;
@@ -223,10 +317,11 @@ function resetUploadCacheDir() {
 
 app.whenReady().then(() => {
   userDataDir = app.getPath('userData');
-  logFilePath = path.join(userDataDir, 'sent-log.json');
+  sentLogsDir = path.join(userDataDir, 'sent-logs');
   templatesPath = path.join(userDataDir, 'templates.json');
   uploadCacheDir = path.join(userDataDir, 'upload-cache');
-  ensureLogFile();
+  fs.mkdirSync(sentLogsDir, { recursive: true });
+  ensureSentLogStylesheet();
   ensureTemplatesFile();
   resetUploadCacheDir();
   createWindow();
@@ -372,14 +467,14 @@ ipcMain.handle('parse-excel', async (_event, arrayBuffer) => {
 });
 
 ipcMain.handle('send-emails', async (_event, payload) => {
-  const { matches } = payload;
+  const { matches, report = {} } = payload;
   const scriptPath = prepareOutlookAppleScript();
   if (!scriptPath) {
-    return { success: false, message: 'Outlook AppleScript not available.', hasLogEntries: hasLogEntries() };
+    return { success: false, message: 'Outlook AppleScript not available.', hasLogEntries: hasSentLogs() };
   }
 
+  const logEntries = [];
   try {
-    const logEntries = [];
     matches.forEach((match) => {
       if (!match.filePath || !fs.existsSync(match.filePath)) {
         throw new Error(`Attachment missing for ${match.firstname} ${match.lastname}`);
@@ -408,46 +503,28 @@ ipcMain.handle('send-emails', async (_event, payload) => {
         fileName: path.basename(match.filePath)
       });
     });
-    appendLogEntries(logEntries);
-    return { success: true, hasLogEntries: hasLogEntries() };
+    const logPath = writeSentLog(logEntries, report);
+    return { success: true, logPath, hasLogEntries: hasSentLogs() };
   } catch (error) {
+    // Still record whatever was sent before the failure.
+    writeSentLog(logEntries, report, error.message);
     dialog.showErrorBox('Email Error', error.message);
-    return { success: false, message: error.message, hasLogEntries: hasLogEntries() };
+    return { success: false, message: error.message, hasLogEntries: hasSentLogs() };
   }
-});
-
-ipcMain.handle('export-log', async () => {
-  const entries = readLogEntries();
-  if (!entries.length) {
-    return { success: false, message: 'No sent emails to export yet.', hasLogEntries: false };
-  }
-  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow || undefined, {
-    title: 'Export Sent Emails',
-    defaultPath: 'student-feedback-sent.txt',
-    filters: [{ name: 'Text Files', extensions: ['txt'] }]
-  });
-  if (canceled || !filePath) {
-    return { success: false, message: 'Export canceled.', hasLogEntries: true };
-  }
-  const lines = entries.map((entry) => {
-    const formattedDate = dutchDateFormatter.format(new Date(entry.timestamp));
-    return `[${formattedDate}] - sent email to ${entry.firstname} ${entry.lastname} <${entry.email}> with attachment ${entry.fileName}`;
-  });
-  fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
-  return { success: true, filePath, hasLogEntries: true };
 });
 
 ipcMain.handle('get-log-status', async () => {
-  return { success: true, hasEntries: hasLogEntries() };
+  return { success: true, hasEntries: hasSentLogs() };
 });
 
-ipcMain.handle('open-user-data', async () => {
-  if (!userDataDir) {
-    userDataDir = app.getPath('userData');
+ipcMain.handle('open-sent-logs', async () => {
+  if (!sentLogsDir) {
+    sentLogsDir = path.join(app.getPath('userData'), 'sent-logs');
   }
   try {
-    await shell.openPath(userDataDir);
-    return { success: true, path: userDataDir };
+    fs.mkdirSync(sentLogsDir, { recursive: true });
+    await shell.openPath(sentLogsDir);
+    return { success: true, path: sentLogsDir };
   } catch (error) {
     return { success: false, message: error.message };
   }
@@ -537,18 +614,6 @@ ipcMain.handle('cache-uploaded-files', async (_event, files = []) => {
     return { success: true, files: cachedFiles };
   } catch (error) {
     return { success: false, message: error.message };
-  }
-});
-
-ipcMain.handle('clear-log', async () => {
-  if (!logFilePath) {
-    return { success: false, message: 'Log path not initialized.', hasEntries: hasLogEntries() };
-  }
-  try {
-    fs.writeFileSync(logFilePath, '[]', 'utf8');
-    return { success: true, hasEntries: false };
-  } catch (error) {
-    return { success: false, message: error.message, hasEntries: hasLogEntries() };
   }
 });
 

@@ -5,9 +5,12 @@ const feedbackInput = document.getElementById('feedback-input');
 const fileList = document.getElementById('file-list');
 const matchBody = document.getElementById('match-body');
 const sendBtn = document.getElementById('send-btn');
-const exportLogBtn = document.getElementById('export-log-btn');
-const openDataBtn = document.getElementById('open-data-btn');
-const clearLogBtn = document.getElementById('clear-log-btn');
+const openLogsBtn = document.getElementById('open-logs-btn');
+const clearFilesBtn = document.getElementById('clear-files-btn');
+const matchSummaryEl = document.getElementById('match-summary');
+const unmatchedDetails = document.getElementById('unmatched-details');
+const unmatchedSummary = document.getElementById('unmatched-summary');
+const unmatchedList = document.getElementById('unmatched-list');
 const templateNameInput = document.getElementById('template-name');
 const saveTemplateBtn = document.getElementById('save-template-btn');
 const templateButtonsContainer = document.getElementById('template-buttons');
@@ -23,10 +26,14 @@ if (rosterPreview) {
   rosterPreview.style.display = 'none';
 }
 
+const ROSTER_PREVIEW_LIMIT = 8;
+
 let students = [];
 let feedbackFiles = [];
 let matches = [];
+let unmatchedStudents = [];
 let messageTemplates = [];
+let activeTemplateName = null;
 const selectionState = new Map();
 
 subjectInput.value = 'Rubric Writing Skills - {{firstname}} {{lastname}}';
@@ -52,10 +59,16 @@ dropZone.addEventListener('drop', handleDrop);
 dropZone.addEventListener('click', () => feedbackInput.click());
 feedbackInput.addEventListener('change', handleFeedbackInputChange);
 sendBtn.addEventListener('click', handleSend);
-exportLogBtn.addEventListener('click', handleExportLog);
-openDataBtn.addEventListener('click', handleOpenData);
-clearLogBtn.addEventListener('click', handleClearLog);
+openLogsBtn.addEventListener('click', handleOpenLogs);
+clearFilesBtn.addEventListener('click', clearFeedbackFiles);
 saveTemplateBtn.addEventListener('click', handleSaveTemplate);
+// Editing the message manually means it no longer equals the applied template.
+[subjectInput, bodyInput].forEach((el) => el.addEventListener('input', () => {
+  if (activeTemplateName) {
+    activeTemplateName = null;
+    renderTemplateButtons();
+  }
+}));
 if (selectAllMatchesCheckbox) {
   selectAllMatchesCheckbox.addEventListener('change', () => {
     const checked = selectAllMatchesCheckbox.checked;
@@ -66,14 +79,19 @@ if (selectAllMatchesCheckbox) {
     updateSelectionControls();
   });
 }
-refreshExportAvailability();
 loadTemplates()
   .catch((error) => {
     console.error('Initial template load failed:', error);
   })
-  .finally(() => {
-    initializeDefaultTemplate();
-    updateSelectionControls();
+  .finally(async () => {
+    await initializeDefaultTemplate();
+    // The fields are pre-filled with the default template, so mark it active.
+    const defaultTemplate = messageTemplates.find((template) => template.name === 'Rubric WS');
+    if (defaultTemplate && subjectInput.value === defaultTemplate.subject && bodyInput.value === defaultTemplate.body) {
+      activeTemplateName = defaultTemplate.name;
+      renderTemplateButtons();
+    }
+    updateMatches();
   });
 
 function handleExcelUpload(event) {
@@ -116,6 +134,8 @@ function processExcelFile(file) {
     }
     students = result.students;
     setRosterStatus(`Loaded ${students.length} students.`, 'success');
+    const hasStudentIds = students.some((student) => (student.studentid || '').trim());
+    document.getElementById('studentid-hint').hidden = !hasStudentIds;
     renderRosterPreview();
     updateMatches();
   };
@@ -160,19 +180,53 @@ async function addFeedbackFiles(files) {
     return;
   }
   feedbackFiles = dedupeFiles(feedbackFiles.concat(resolvedFiles));
-  const fileCount = feedbackFiles.length;
-  const label = fileCount === 1 ? 'file' : 'files';
-  setFeedbackStatus(`Loaded ${fileCount} ${label}.`, 'success');
-  renderFileList();
   updateMatches();
 }
 
+function removeFeedbackFile(filePath) {
+  feedbackFiles = feedbackFiles.filter((file) => file.path !== filePath);
+  updateMatches();
+}
+
+function clearFeedbackFiles() {
+  if (!feedbackFiles.length) {
+    return;
+  }
+  if (feedbackFiles.length > 3 && !window.confirm(`Remove all ${feedbackFiles.length} files?`)) {
+    return;
+  }
+  feedbackFiles = [];
+  updateMatches();
+}
+
+function updateFeedbackStatus() {
+  const total = feedbackFiles.length;
+  clearFilesBtn.hidden = total === 0;
+  if (!total) {
+    setFeedbackStatus('No files loaded yet.');
+    return;
+  }
+  const matchedPaths = new Set(matches.map((match) => match.filePath));
+  const matchedCount = feedbackFiles.filter((file) => matchedPaths.has(file.path)).length;
+  const unmatchedCount = total - matchedCount;
+  const label = total === 1 ? 'file' : 'files';
+  if (!students.length) {
+    setFeedbackStatus(`${total} ${label} loaded — load a roster to see matches.`, 'info');
+  } else if (unmatchedCount === 0) {
+    setFeedbackStatus(`${total} ${label} loaded, all matched.`, 'success');
+  } else {
+    setFeedbackStatus(`${total} ${label} loaded, ${matchedCount} matched, ${unmatchedCount} without a student.`, unmatchedCount ? 'warning' : 'success');
+  }
+}
+
+// Files dropped without a filesystem path are copied into a fresh cache folder
+// every time, so the same file dropped twice gets two different paths. Dedupe
+// on the file name instead and keep the most recently added copy.
 function dedupeFiles(fileArray) {
   const seen = new Map();
   fileArray.forEach((file) => {
-    if (!seen.has(file.path)) {
-      seen.set(file.path, file);
-    }
+    const key = (file.name || file.path || '').toLowerCase();
+    seen.set(key, file);
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -227,15 +281,46 @@ async function collectDroppedFiles(dataTransfer) {
 
 function renderFileList() {
   fileList.innerHTML = '';
+  const matchByPath = new Map(matches.map((match) => [match.filePath, match]));
   feedbackFiles.forEach((file) => {
+    const match = matchByPath.get(file.path);
     const li = document.createElement('li');
-    li.textContent = file.name;
+    li.className = `file-item ${match ? 'matched' : students.length ? 'unmatched' : 'pending'}`;
+
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = file.name;
+    name.title = file.path;
+
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    if (match) {
+      badge.textContent = `→ ${match.firstname} ${match.lastname}`.trim();
+    } else if (students.length) {
+      badge.textContent = 'no match';
+    } else {
+      badge.textContent = 'waiting for roster';
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'icon-btn';
+    removeBtn.textContent = '×';
+    removeBtn.title = `Remove ${file.name}`;
+    removeBtn.setAttribute('aria-label', `Remove ${file.name}`);
+    removeBtn.addEventListener('click', () => removeFeedbackFile(file.path));
+
+    li.appendChild(name);
+    li.appendChild(badge);
+    li.appendChild(removeBtn);
     fileList.appendChild(li);
   });
 }
 
 function updateMatches() {
-  matches = computeMatches();
+  const result = computeMatches();
+  matches = result.matches;
+  unmatchedStudents = result.unmatched;
   const currentIds = new Set(matches.map((match) => match.id));
   Array.from(selectionState.keys()).forEach((id) => {
     if (!currentIds.has(id)) {
@@ -247,8 +332,28 @@ function updateMatches() {
       selectionState.set(match.id, true);
     }
   });
+  renderFileList();
+  updateFeedbackStatus();
   renderMatchTable();
+  renderUnmatchedStudents();
   updateSelectionControls();
+}
+
+function renderUnmatchedStudents() {
+  if (!students.length || !unmatchedStudents.length) {
+    unmatchedDetails.hidden = true;
+    unmatchedDetails.open = false;
+    return;
+  }
+  unmatchedDetails.hidden = false;
+  const count = unmatchedStudents.length;
+  unmatchedSummary.textContent = `${count} student${count === 1 ? '' : 's'} without a matching file`;
+  unmatchedList.innerHTML = '';
+  unmatchedStudents.forEach((student) => {
+    const li = document.createElement('li');
+    li.textContent = `${student.firstname} ${student.lastname}`.trim() || student.email;
+    unmatchedList.appendChild(li);
+  });
 }
 
 function renderRosterPreview() {
@@ -272,17 +377,31 @@ function renderRosterPreview() {
     </thead>
   `;
   const tbody = document.createElement('tbody');
-  students.forEach((student) => {
+  students.slice(0, ROSTER_PREVIEW_LIMIT).forEach((student) => {
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td>${student.firstname || ''}</td>
-      <td>${student.lastname || ''}</td>
-      <td>${student.email || ''}</td>
+      <td title="${escapeHtml(student.firstname || '')}">${escapeHtml(student.firstname || '')}</td>
+      <td title="${escapeHtml(student.lastname || '')}">${escapeHtml(student.lastname || '')}</td>
+      <td title="${escapeHtml(student.email || '')}">${escapeHtml(student.email || '')}</td>
     `;
     tbody.appendChild(row);
   });
   table.appendChild(tbody);
   rosterPreview.appendChild(table);
+  if (students.length > ROSTER_PREVIEW_LIMIT) {
+    const more = document.createElement('p');
+    more.className = 'placeholder';
+    more.textContent = `…and ${students.length - ROSTER_PREVIEW_LIMIT} more`;
+    rosterPreview.appendChild(more);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function computeMatches() {
@@ -293,7 +412,7 @@ function computeMatches() {
     tokens: tokenizeFileName(file.name || '')
   }));
 
-  return students
+  const records = students
     .map((student) => {
       const first = (student.firstname || '').trim();
       const last = (student.lastname || '').trim();
@@ -330,41 +449,126 @@ function computeMatches() {
         studentid: studentId,
         fileName: ''
       };
-    })
-    .filter((record) => record.filePath)
-    .sort((a, b) => {
-      const lastCompare = (a.lastname || '').localeCompare(b.lastname || '');
-      if (lastCompare !== 0) {
-        return lastCompare;
-      }
-      return (a.firstname || '').localeCompare(b.firstname || '');
     });
+
+  const byName = (a, b) => {
+    const lastCompare = (a.lastname || '').localeCompare(b.lastname || '');
+    if (lastCompare !== 0) {
+      return lastCompare;
+    }
+    return (a.firstname || '').localeCompare(b.firstname || '');
+  };
+
+  return {
+    matches: records.filter((record) => record.filePath).sort(byName),
+    unmatched: records.filter((record) => !record.filePath).sort(byName)
+  };
 }
 
 function renderMatchTable() {
   matchBody.innerHTML = '';
-  matches.forEach((match) => {
+  if (!matches.length) {
     const row = document.createElement('tr');
+    row.className = 'empty-row';
+    const cell = document.createElement('td');
+    cell.colSpan = 4;
+    if (!students.length && !feedbackFiles.length) {
+      cell.textContent = 'Load a roster and add feedback files to see matches here.';
+    } else if (!students.length) {
+      cell.textContent = 'Load a roster (step 1) to match the files.';
+    } else if (!feedbackFiles.length) {
+      cell.textContent = 'Add feedback files (step 2) to match them to students.';
+    } else {
+      cell.textContent = 'None of the files match a student. Check the file names against the roster.';
+    }
+    row.appendChild(cell);
+    matchBody.appendChild(row);
+    return;
+  }
+  matches.forEach((match) => {
+    const isSelected = Boolean(selectionState.get(match.id));
+    const row = document.createElement('tr');
+    row.className = `match-row${isSelected ? ' selected' : ''}`;
     row.innerHTML = `
-      <td>${match.firstname} ${match.lastname}</td>
-      <td>${match.email}</td>
-      <td>${match.fileName}</td>
+      <td>${escapeHtml(`${match.firstname} ${match.lastname}`.trim())}</td>
+      <td>${escapeHtml(match.email)}</td>
+      <td class="file-cell" title="${escapeHtml(match.filePath)}">${escapeHtml(match.fileName)}</td>
     `;
     const selectCell = document.createElement('td');
     selectCell.className = 'match-select';
-    const label = document.createElement('label');
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.checked = Boolean(selectionState.get(match.id));
-    checkbox.addEventListener('change', () => {
-      selectionState.set(match.id, checkbox.checked);
-      renderMatchTable();
-      updateSelectionControls();
-    });
-    label.appendChild(checkbox);
-    selectCell.appendChild(label);
+    checkbox.checked = isSelected;
+    selectCell.appendChild(checkbox);
     row.appendChild(selectCell);
+
+    const setSelected = (next) => {
+      selectionState.set(match.id, next);
+      checkbox.checked = next;
+      row.classList.toggle('selected', next);
+      updateSelectionControls();
+    };
+    // The checkbox toggles natively; stop the click from bubbling so the row
+    // handler doesn't immediately toggle it back.
+    checkbox.addEventListener('click', (event) => event.stopPropagation());
+    checkbox.addEventListener('change', () => setSelected(checkbox.checked));
+    // Clicking anywhere else on the row toggles too.
+    row.addEventListener('click', () => setSelected(!selectionState.get(match.id)));
     matchBody.appendChild(row);
+  });
+}
+
+// Shows a large in-app confirmation listing every recipient. Resolves true/false.
+function confirmSend(selected) {
+  const dialog = document.getElementById('confirm-dialog');
+  const body = document.getElementById('confirm-body');
+  const title = document.getElementById('confirm-title');
+  const subtitle = document.getElementById('confirm-subtitle');
+  const okBtn = document.getElementById('confirm-ok');
+  const cancelBtn = document.getElementById('confirm-cancel');
+
+  const count = selected.length;
+  title.textContent = `Send ${count} email${count === 1 ? '' : 's'} via Outlook?`;
+  subtitle.textContent = `Subject: ${fillTemplate(subjectInput.value || '', selected[0])}`;
+  okBtn.textContent = `Send ${count} email${count === 1 ? '' : 's'}`;
+
+  body.innerHTML = '';
+  selected.forEach((match, index) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="muted">${index + 1}</td>
+      <td>${escapeHtml(`${match.firstname} ${match.lastname}`.trim())}</td>
+      <td>${escapeHtml(match.email)}</td>
+      <td class="file-cell" title="${escapeHtml(match.fileName)}">${escapeHtml(match.fileName)}</td>
+    `;
+    body.appendChild(row);
+  });
+
+  return new Promise((resolve) => {
+    const cleanup = (result) => {
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      dialog.removeEventListener('close', onClose);
+      dialog.removeEventListener('click', onBackdrop);
+      if (dialog.open) {
+        dialog.close();
+      }
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onClose = () => cleanup(false); // Esc key
+    const onBackdrop = (event) => {
+      if (event.target === dialog) {
+        cleanup(false);
+      }
+    };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.addEventListener('close', onClose);
+    dialog.addEventListener('click', onBackdrop);
+    dialog.showModal();
+    okBtn.focus();
   });
 }
 
@@ -386,11 +590,11 @@ async function handleSend() {
     return;
   }
   const plural = selectedMatches.length === 1 ? '' : 's';
-  const confirmed = window.confirm(`Send ${selectedMatches.length} email${plural}?`);
+  const confirmed = await confirmSend(selectedMatches);
   if (!confirmed) {
     return;
   }
-  setStatus('Sending emails…');
+  setStatus(`Sending ${selectedMatches.length} email${plural}…`);
   sendBtn.disabled = true;
 
   const subjectTemplate = subjectInput.value || 'Feedback for {{firstname}} {{lastname}}';
@@ -401,17 +605,32 @@ async function handleSend() {
     body: normalizeBodyText(fillTemplate(bodyTemplate, match))
   }));
 
-  const response = await window.electronAPI.sendEmails({ matches: payloadMatches });
-  if (response.success) {
-    setStatus('Emails sent successfully.', 'success');
-    if (typeof response.hasLogEntries !== 'undefined') {
-      setExportEnabled(response.hasLogEntries);
+  const pick = (record) => ({
+    firstname: record.firstname,
+    lastname: record.lastname,
+    email: record.email,
+    studentid: record.studentid,
+    fileName: record.fileName || ''
+  });
+  const response = await window.electronAPI.sendEmails({
+    matches: payloadMatches,
+    report: {
+      subjectTemplate,
+      skipped: matches.filter((match) => !selectionState.get(match.id)).map(pick),
+      unmatchedStudents: unmatchedStudents.map(pick),
+      unmatchedFiles: feedbackFiles
+        .filter((file) => !matches.some((match) => match.filePath === file.path))
+        .map((file) => file.name)
     }
+  });
+  if (response.success) {
+    const logNote = response.logPath ? ` Log saved as ${response.logPath.split('/').pop()}.` : '';
+    setStatus(`${selectedMatches.length} email${plural} sent.${logNote}`, 'success');
+    // Deselect what was just sent so a second click can't resend by accident.
+    selectedMatches.forEach((match) => selectionState.set(match.id, false));
+    renderMatchTable();
   } else {
     setStatus(response.message || 'Failed to send emails.', 'error');
-    if (typeof response.hasLogEntries !== 'undefined') {
-      setExportEnabled(response.hasLogEntries);
-    }
   }
   updateSelectionControls();
 }
@@ -448,6 +667,22 @@ function updateSelectionControls() {
   const selectedCount = getSelectedMatches().length;
   const hasMatches = matches.length > 0;
   sendBtn.disabled = !hasMatches || selectedCount === 0;
+  sendBtn.textContent = selectedCount
+    ? `Send ${selectedCount} email${selectedCount === 1 ? '' : 's'}`
+    : 'Send emails';
+
+  if (matchSummaryEl) {
+    if (!students.length) {
+      matchSummaryEl.textContent = '';
+    } else {
+      const parts = [`${matches.length} of ${students.length} students matched`];
+      if (hasMatches) {
+        parts.push(`${selectedCount} selected`);
+      }
+      matchSummaryEl.textContent = parts.join(' · ');
+    }
+  }
+
   if (selectAllMatchesCheckbox) {
     if (!hasMatches) {
       selectAllMatchesCheckbox.checked = false;
@@ -468,33 +703,6 @@ function setTemplateStatus(message, type) {
   }
   templateStatusEl.textContent = message || '';
   templateStatusEl.className = `template-status${type ? ` ${type}` : ''}`;
-}
-
-async function handleExportLog() {
-  setStatus('Exporting log…');
-  const response = await window.electronAPI.exportLog();
-  if (response.success) {
-    setStatus(`Log exported to ${response.filePath}`, 'success');
-  } else {
-    setStatus(response.message || 'Export failed.', 'error');
-  }
-  if (typeof response.hasLogEntries !== 'undefined') {
-    setExportEnabled(response.hasLogEntries);
-  }
-}
-
-async function refreshExportAvailability() {
-  try {
-    const response = await window.electronAPI.getLogStatus();
-    setExportEnabled(Boolean(response && response.hasEntries));
-  } catch {
-    setExportEnabled(false);
-  }
-}
-
-function setExportEnabled(enabled) {
-  exportLogBtn.disabled = !enabled;
-  clearLogBtn.disabled = !enabled;
 }
 
 function getStudentNameTokens(first, last) {
@@ -535,31 +743,13 @@ function buildMatchId(first, last, filePath) {
   ].join('|');
 }
 
-async function handleOpenData() {
-  setStatus('Opening data folder…');
-  const response = await window.electronAPI.openUserData();
+async function handleOpenLogs() {
+  setStatus('Opening sent logs folder…');
+  const response = await window.electronAPI.openSentLogs();
   if (response.success) {
     setStatus(`Opened ${response.path}`, 'success');
   } else {
     setStatus(response.message || 'Failed to open folder.', 'error');
-  }
-}
-
-async function handleClearLog() {
-  const confirmed = window.confirm('This will remove all sent email records. Continue?');
-  if (!confirmed) {
-    return;
-  }
-  setStatus('Clearing sent log…');
-  const response = await window.electronAPI.clearLog();
-  if (response.success) {
-    setStatus('Sent log cleared.', 'success');
-    setExportEnabled(false);
-  } else {
-    setStatus(response.message || 'Failed to clear log.', 'error');
-    if (typeof response.hasEntries !== 'undefined') {
-      setExportEnabled(response.hasEntries);
-    }
   }
 }
 
@@ -618,8 +808,9 @@ function renderTemplateButtons() {
 
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
-    applyBtn.className = 'apply';
+    applyBtn.className = `apply${template.name === activeTemplateName ? ' active' : ''}`;
     applyBtn.textContent = template.name;
+    applyBtn.title = template.name === activeTemplateName ? 'Template in use' : `Use template "${template.name}"`;
     applyBtn.addEventListener('click', () => applyTemplate(template));
 
     const deleteBtn = document.createElement('button');
@@ -638,14 +829,16 @@ function renderTemplateButtons() {
 function applyTemplate(template) {
   subjectInput.value = template.subject || '';
   bodyInput.value = template.body || '';
-  setTemplateStatus(`Loaded template "${template.name}".`, 'success');
+  activeTemplateName = template.name;
+  renderTemplateButtons();
+  setTemplateStatus(`Using template "${template.name}".`, 'success');
 }
 
 async function handleSaveTemplate() {
   const name = (templateNameInput.value || '').trim();
   if (!name) {
-    setStatus('Template name is required.', 'error');
-    console.warn('Template save aborted: missing name.');
+    setTemplateStatus('Give the template a name first.', 'error');
+    templateNameInput.focus();
     return;
   }
   const payload = {
@@ -653,21 +846,20 @@ async function handleSaveTemplate() {
     subject: subjectInput.value || '',
     body: bodyInput.value || ''
   };
-  setStatus('Saving template…');
-  console.log('Saving template', payload);
+  setTemplateStatus('Saving template…');
   try {
     const response = await window.electronAPI.saveTemplate(payload);
     if (response.success) {
       templateNameInput.value = '';
+      activeTemplateName = name;
       await loadTemplates();
-      setStatus(`Template "${name}" saved.`, 'success');
-      console.log(`Template "${name}" saved.`);
+      setTemplateStatus(`Template "${name}" saved.`, 'success');
     } else {
-      setStatus(response.message || 'Failed to save template.', 'error');
+      setTemplateStatus(response.message || 'Failed to save template.', 'error');
       console.error('Template save failed:', response);
     }
   } catch (error) {
-    setStatus(error.message || 'Failed to save template.', 'error');
+    setTemplateStatus(error.message || 'Failed to save template.', 'error');
     console.error('Template save error:', error);
   }
 }
@@ -675,22 +867,23 @@ async function handleSaveTemplate() {
 async function deleteTemplate(name) {
   const confirmed = window.confirm(`Delete template "${name}"?`);
   if (!confirmed) {
-    console.warn('Template delete canceled by user.');
     return;
   }
-  setStatus('Removing template…');
+  setTemplateStatus('Removing template…');
   try {
     const response = await window.electronAPI.deleteTemplate(name);
     if (response.success) {
+      if (activeTemplateName === name) {
+        activeTemplateName = null;
+      }
       await loadTemplates();
-      setStatus(`Template "${name}" removed.`, 'success');
-      console.log(`Template "${name}" removed.`);
+      setTemplateStatus(`Template "${name}" removed.`, 'success');
     } else {
-      setStatus(response.message || 'Failed to delete template.', 'error');
+      setTemplateStatus(response.message || 'Failed to delete template.', 'error');
       console.error('Template delete failed:', response);
     }
   } catch (error) {
-    setStatus(error.message || 'Failed to delete template.', 'error');
+    setTemplateStatus(error.message || 'Failed to delete template.', 'error');
     console.error('Template delete error:', error);
   }
 }

@@ -4,17 +4,19 @@
   "description": "Electron app for emailing student feedback via Outlook.",
   "main": "main.js",
   "scripts": {
+    "postinstall": "install-electron",
     "start": "electron .",
-    "dist": "rm -rf dist && electron-packager . \"Student Batch Mailer\" --platform=darwin --arch=arm64 --out dist --overwrite --prune=true && cd dist && ditto -c -k --sequesterRsrc --keepParent \"Student Batch Mailer-darwin-arm64/Student Batch Mailer.app\" \"Student Batch Mailer-mac.zip\""
+    "icon": "./scripts/build-icon.sh",
+    "dist": "rm -rf dist && electron-packager . \"Student Batch Mailer\" --platform=darwin --arch=arm64 --out dist --overwrite --prune=true --asar --icon=build/icon.icns --app-bundle-id=nl.zuyd.student-batch-mailer --app-category-type=public.app-category.education --ignore='^/(build|dist|sample-data|sample-set|scripts|\\.tmp-report|\\.git|\\.gitignore|README\\.md|pnpm-lock\\.yaml|pnpm-workspace\\.yaml)($|/)' && cd dist && ditto -c -k --sequesterRsrc --keepParent \"Student Batch Mailer-darwin-arm64/Student Batch Mailer.app\" \"Student Batch Mailer-mac.zip\""
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "electron": "^39.2.7",
     "exceljs": "^4.4.0"
   },
   "devDependencies": {
-    "@electron/packager": "^19.0.1"
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.3.0"
   }
 }

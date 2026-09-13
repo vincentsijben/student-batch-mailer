@@ -7,53 +7,81 @@
 </head>
 <body>
   <main>
-    <h1>Student Batch Mailer</h1>
-    <p class="info-note">
-      Files are matched only when the lowercase first- and last-name tokens all appear in the filename (order does not matter).
-      Example: Jo + “Bonten, van de” will match any filename containing jo/bonten/van/de in any order.<br /><br />
-      Roster columns required: firstname, lastname, email (or voornaam, achternaam, email).
-    </p>
+    <header class="app-header">
+      <h1>Student Batch Mailer</h1>
+      <p class="tagline">Match feedback files to students and send them through Outlook in one go.</p>
+    </header>
+
+    <details class="help">
+      <summary>How does matching work?</summary>
+      <div class="help-body">
+        <p>
+          A file is matched to a student when <strong>every</strong> word of the student's first and last name appears
+          somewhere in the file name (case-insensitive, any order). Example: <em>Jo</em> + <em>Bonten, van de</em> matches
+          <code>rubric-jo-van-de-bonten.pdf</code>.
+        </p>
+        <p>
+          Each file can be matched to one student only. If two files fit the same student, the first one wins — remove the
+          wrong one with the <strong>×</strong> next to it.
+        </p>
+        <p>
+          The roster needs three columns: <code>firstname</code>, <code>lastname</code>, <code>email</code>
+          (Dutch <code>voornaam</code>, <code>achternaam</code>, <code>email</code> also work).
+        </p>
+      </div>
+    </details>
+
     <section class="inputs">
       <div class="card">
-        <label for="excel-input">1. Upload student roster (.xlsx)</label>
+        <h2 class="step-title"><span class="step-number">1</span> Student roster</h2>
         <input id="excel-input" type="file" accept=".xlsx" class="sr-only" />
-        <div id="excel-drop-zone" class="drop-zone">Click to browse or drop roster (.xlsx)</div>
+        <div id="excel-drop-zone" class="drop-zone">Click to browse or drop a roster (.xlsx)</div>
         <p id="roster-status" class="status-note">No roster loaded yet.</p>
-        <div id="roster-preview" class="roster-preview">
-          <p class="placeholder">No roster loaded yet.</p>
-        </div>
+        <div id="roster-preview" class="roster-preview"></div>
       </div>
       <div class="card">
-        <label>2. Drag &amp; drop files</label>
+        <h2 class="step-title">
+          <span class="step-number">2</span> Feedback files
+          <button id="clear-files-btn" type="button" class="link-btn" hidden>Clear all</button>
+        </h2>
         <input id="feedback-input" type="file" multiple class="sr-only" />
-        <div id="drop-zone" class="drop-zone">Click to browse or drop files</div>
+        <div id="drop-zone" class="drop-zone">Click to browse or drop files / folders</div>
         <p id="feedback-status" class="status-note">No files loaded yet.</p>
-        <ul id="file-list"></ul>
+        <ul id="file-list" class="file-list"></ul>
       </div>
     </section>
 
     <section class="email-settings card">
-      <label>Subject</label>
+      <h2 class="step-title"><span class="step-number">3</span> Message</h2>
+      <label for="subject">Subject</label>
       <input id="subject" type="text" placeholder="Feedback for {{firstname}} {{lastname}}" />
-      <label>Body</label>
-      <textarea id="body" rows="4" placeholder="Hello {{firstname}},\nPlease find your feedback attached."></textarea>
+      <label for="body">Body</label>
+      <textarea id="body" rows="8" placeholder="Hello {{firstname}},&#10;Please find your feedback attached."></textarea>
+      <p class="hint">
+        Placeholders: <code>{{firstname}}</code> <code>{{lastname}}</code> <code>{{email}}</code><span id="studentid-hint" hidden> <code>{{studentid}}</code></span>
+        — the attachment is added automatically.
+      </p>
       <div class="template-controls">
-        <div class="template-save">
-          <input id="template-name" type="text" placeholder="Template name (e.g., Rubric)" />
-          <button id="save-template-btn" type="button">Save template</button>
-        </div>
+        <label>Templates</label>
         <div id="template-buttons" class="template-buttons">
           <p class="placeholder">No templates saved yet.</p>
+        </div>
+        <div class="template-save">
+          <input id="template-name" type="text" placeholder="Save current message as… (name)" />
+          <button id="save-template-btn" type="button" class="secondary">Save template</button>
         </div>
         <p id="template-status" class="template-status"></p>
       </div>
     </section>
 
-    <section class="card">
+    <section class="card matches-card">
       <div class="table-header">
-        <h2>Matches</h2>
+        <h2 class="step-title">
+          <span class="step-number">4</span> Review &amp; send
+          <span id="match-summary" class="match-summary"></span>
+        </h2>
         <div class="match-actions">
-          <button id="send-btn" disabled>Send emails to checked students</button>
+          <button id="send-btn" disabled>Send emails</button>
         </div>
       </div>
       <table>
@@ -72,19 +100,42 @@
         </thead>
         <tbody id="match-body"></tbody>
       </table>
-      <p id="status"></p>
-    </section>
-
-    <section class="advanced-actions card">
-      <h3>Advanced actions</h3>
-      <div class="advanced-buttons">
-        <button id="open-data-btn" type="button">Open data folder</button>
-        <button id="clear-log-btn" class="danger" type="button" disabled>Clear sent log</button>
-        <button id="export-log-btn" type="button" disabled>Export sent log</button>
+      <details id="unmatched-details" class="unmatched" hidden>
+        <summary id="unmatched-summary"></summary>
+        <ul id="unmatched-list"></ul>
+      </details>
+      <div class="card-footer">
+        <p id="status"></p>
+        <button id="open-logs-btn" type="button" class="link-btn" title="A log file is written automatically after every send">Open sent logs folder</button>
       </div>
     </section>
 
   </main>
+
+  <dialog id="confirm-dialog" class="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirm-title">Send emails via Outlook?</h2>
+      <p id="confirm-subtitle" class="confirm-subtitle"></p>
+      <div class="confirm-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Student</th>
+              <th>Email</th>
+              <th>Attachment</th>
+            </tr>
+          </thead>
+          <tbody id="confirm-body"></tbody>
+        </table>
+      </div>
+      <div class="confirm-actions">
+        <button type="button" id="confirm-cancel" class="secondary">Cancel</button>
+        <button type="button" id="confirm-ok">Send</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="renderer.js" type="module"></script>
 </body>
 </html>

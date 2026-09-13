@@ -1,0 +1,3 @@
+# Electron tooling (@electron/packager --prune) expects a flat npm-style
+# node_modules layout and cannot follow pnpm's symlinked virtual store.
+nodeLinker: hoisted

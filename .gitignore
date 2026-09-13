@@ -2,3 +2,7 @@ node_modules/
 dist/
 sample-set/
 .DS_Store
+
+# Icon build intermediates
+build/icon-1024.png
+build/icon.iconset/
