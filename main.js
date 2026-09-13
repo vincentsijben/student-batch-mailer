@@ -327,16 +327,10 @@ app.whenReady().then(() => {
   createWindow();
 });
 
+// Single-window utility: closing the window quits the app on every platform,
+// instead of the macOS default of lingering in the Dock until Cmd+Q.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+  app.quit();
 });
 
 function normalizeCellValue(value) {
