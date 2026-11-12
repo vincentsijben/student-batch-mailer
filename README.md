@@ -60,7 +60,14 @@ No other installation is needed — Node, pnpm and the repository are only requi
 ## Platform support
 - The distributed build targets macOS on Apple Silicon (`--platform=darwin --arch=arm64`), i.e., M1/M2/M3 machines. Intel Macs require rebuilding with `pnpm run dist -- --arch=x64` or similar.
 - Microsoft Outlook for macOS must be installed and allowed to run AppleScript, because sending relies on `osascript outlook.scpt`. Other mail clients are not supported.
-- Uploads are cached under `~/Library/Application Support/student-batch-mailer/upload-cache/` for the duration of each session so pathless drag-and-drop files can be attached.
+- Added files are never modified, moved or deleted. The app copies them to `~/Library/Application Support/student-batch-mailer/upload-cache/` (an instant copy-on-write clone on APFS) and only attaches those copies. A copy is deleted when you remove the file from the list or press *Clear all*, the whole folder is deleted when the app quits, and it is wiped again at the next start in case the app crashed.
+
+## Matching
+A file belongs to a student when every word of the student's first and last name appears in the file name (case, accents and punctuation are ignored). The app never guesses: if a file fits several students, or a student fits several files, nothing is assigned and the case is listed under **Needs your attention** in step 4, where you pick the right option. Roster problems (missing names, invalid or shared email addresses, duplicate names) are listed there too; students with an unusable email address can't be selected.
+
+- If a student has both a PDF and a Word version, only the PDF is used. A student with only a Word file is listed under *Needs your attention*; Word files are never sent unless you choose *Send the Word file anyway*.
+- The message template is selected from the file names: each template has keywords — full course names and abbreviations: `ws`/`writing skills`, `mmt1`/`mmt`/`multimedia technology`, `vd`/`visual design`, `ph`/`photography`/`fotografie`, `dr`/`design research`. When most files contain one template's keyword it is applied automatically, unless you edited the message yourself. Files that mention several courses give a warning instead; a course only counts when it appears in at least 20% of the files, so a stray `vd` (van der) in one name doesn't trigger that. Your own templates use their name minus the word "Rubric" as keyword.
+- **Send test to myself** sends the first 5 matches in the review list to your own address (default `vincent.sijben@zuyd.nl`, remembered after you change it), with the real subject, text and attachment and `[TEST → student]` in front of the subject. Students receive nothing and test sends are not logged.
 
 ## Sent logs
 After every send the app automatically writes a timestamped HTML report (e.g. `sent-2026-09-13_14-05-32.html`) to `~/Library/Application Support/student-batch-mailer/sent-logs/`. Each report lists:
@@ -68,7 +75,8 @@ After every send the app automatically writes a timestamped HTML report (e.g. `s
 - the emails that were sent (time, student, address, attachment),
 - students that were matched but unchecked,
 - students in the roster without a matching file,
-- files that didn't match any student.
+- files that didn't match any student,
+- matching questions and roster problems that were still open at the time of sending.
 
 The reports share one stylesheet, `sent-logs/css/style.css`, which is copied from [`report/style.css`](./report/style.css) on every app start — edit that file to restyle all reports. Use the **Open sent logs folder** button in the app to view them. Saved message templates live in the same Application Support folder as `templates.json`.
 

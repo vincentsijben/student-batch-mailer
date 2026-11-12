@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
   <title>Student Batch Mailer</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -21,12 +22,31 @@
           <code>rubric-jo-van-de-bonten.pdf</code>.
         </p>
         <p>
-          Each file can be matched to one student only. If two files fit the same student, the first one wins — remove the
-          wrong one with the <strong>×</strong> next to it.
+          Accents and punctuation are ignored (<em>José Müller</em> matches <code>jose-muller.pdf</code> and
+          <code>jose-mueller.pdf</code>).
+        </p>
+        <p>
+          If a student has both a <strong>PDF</strong> and a <strong>Word</strong> version, only the PDF is sent. Word files
+          are never sent unless you explicitly choose to.
+        </p>
+        <p>
+          The message template is chosen automatically from the file names (e.g. <code>rubric_MMT1_….pdf</code> → template
+          <em>Rubric MMT1</em>). Abbreviations work too: <code>WS</code>, <code>MMT</code>, <code>VD</code>,
+          <code>DR</code>, <code>PH</code>. Hover over a template to see which words it reacts to.
+        </p>
+        <p>
+          Your original files are never changed or deleted: the app works with copies, which are removed when you remove
+          a file from the list and when you quit the app.
+        </p>
+        <p>
+          The app never guesses. If a file fits <strong>more than one student</strong>, or a student fits
+          <strong>more than one file</strong>, nothing is assigned and it shows up under <strong>Needs your attention</strong>
+          in step 4, where you choose who gets what.
         </p>
         <p>
           The roster needs three columns: <code>firstname</code>, <code>lastname</code>, <code>email</code>
-          (Dutch <code>voornaam</code>, <code>achternaam</code>, <code>email</code> also work).
+          (Dutch <code>voornaam</code>, <code>achternaam</code>, <code>e-mail</code> also work). An optional
+          <code>studentid</code> / <code>studentnummer</code> column can be used as <code>{{studentid}}</code>.
         </p>
       </div>
     </details>
@@ -61,6 +81,7 @@
         Placeholders: <code>{{firstname}}</code> <code>{{lastname}}</code> <code>{{email}}</code><span id="studentid-hint" hidden> <code>{{studentid}}</code></span>
         — the attachment is added automatically.
       </p>
+      <p id="placeholder-warning" class="inline-warning" hidden></p>
       <div class="template-controls">
         <label>Templates</label>
         <div id="template-buttons" class="template-buttons">
@@ -81,8 +102,14 @@
           <span id="match-summary" class="match-summary"></span>
         </h2>
         <div class="match-actions">
+          <button id="test-btn" type="button" class="secondary" disabled title="Sends the first 5 matches below to your own address, so you can check subject, text and attachment">Send test to myself</button>
           <button id="send-btn" disabled>Send emails</button>
         </div>
+      </div>
+      <div id="attention" class="attention" hidden>
+        <h3 id="attention-title" class="attention-title"></h3>
+        <p class="attention-intro">Nothing in this list will be sent until you sort it out. Choose an option and the match table updates right away.</p>
+        <ul id="attention-list" class="attention-list"></ul>
       </div>
       <table>
         <thead>
@@ -116,6 +143,7 @@
     <form method="dialog">
       <h2 id="confirm-title">Send emails via Outlook?</h2>
       <p id="confirm-subtitle" class="confirm-subtitle"></p>
+      <div id="confirm-warnings" class="confirm-warnings" hidden></div>
       <div class="confirm-table-wrap">
         <table>
           <thead>
@@ -132,6 +160,37 @@
       <div class="confirm-actions">
         <button type="button" id="confirm-cancel" class="secondary">Cancel</button>
         <button type="button" id="confirm-ok">Send</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="send-progress" class="send-progress" role="status" aria-live="polite" hidden>
+    <div class="send-progress-head">
+      <strong id="send-progress-title">Sending…</strong>
+      <span id="send-progress-count" class="send-progress-count"></span>
+      <button id="send-progress-close" type="button" class="icon-btn" aria-label="Close" hidden>×</button>
+    </div>
+    <progress id="send-progress-bar" max="1" value="0"></progress>
+    <p id="send-progress-detail" class="send-progress-detail"></p>
+  </div>
+
+  <dialog id="test-dialog" class="confirm-dialog test-dialog">
+    <form method="dialog" id="test-form">
+      <h2 id="test-title">Send a test to yourself</h2>
+      <p class="confirm-subtitle">
+        The first matches in the list are sent to the address below instead of to the students — with their real
+        subject, text and attachment, and “[TEST]” in front of the subject. Students receive nothing.
+      </p>
+      <div class="test-body">
+        <label for="test-address">Send test emails to</label>
+        <input id="test-address" type="email" autocomplete="email" required />
+        <p id="test-error" class="status-note error" hidden></p>
+        <p class="test-list-label">These matches are used:</p>
+        <ol id="test-list" class="test-list"></ol>
+      </div>
+      <div class="confirm-actions">
+        <button type="button" id="test-cancel" class="secondary">Cancel</button>
+        <button type="submit" id="test-ok">Send test</button>
       </div>
     </form>
   </dialog>

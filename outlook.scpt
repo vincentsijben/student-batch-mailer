@@ -15,8 +15,8 @@ on run argv
   set recipientName to item 4 of argv
   set recipientEmail to item 5 of argv
 
+  -- No "activate": Outlook stays in the background so the app's progress stays visible.
   tell application "Microsoft Outlook"
-    activate
     set outgoingMessage to make new outgoing message with properties {subject:messageSubject, plain text content:messageBody}
 
     if attachmentFile is not missing value then
