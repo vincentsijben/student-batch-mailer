@@ -7,7 +7,8 @@
     "postinstall": "install-electron",
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "icon": "./scripts/build-icon.sh",
-    "dist": "rm -rf dist && electron-packager . \"Student Batch Mailer\" --platform=darwin --arch=arm64 --out dist --overwrite --prune=true --asar --icon=build/icon.icns --app-bundle-id=nl.zuyd.student-batch-mailer --app-category-type=public.app-category.education --ignore='^/(build|dist|sample-data|sample-set|scripts|\\.tmp-report|\\.git|\\.gitignore|README\\.md|pnpm-lock\\.yaml|pnpm-workspace\\.yaml)($|/)' && cd dist && ditto -c -k --sequesterRsrc --keepParent \"Student Batch Mailer-darwin-arm64/Student Batch Mailer.app\" \"Student Batch Mailer-mac.zip\""
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })\"",
+    "dist": "pnpm run clean && electron-packager . \"Student Batch Mailer\" --platform=darwin --arch=arm64 --out dist --overwrite --prune=true --asar --icon=build/icon.icns --app-bundle-id=nl.zuyd.student-batch-mailer --app-category-type=public.app-category.education --ignore='^/(build|dist|sample-data|sample-set|scripts|\\.tmp-report|\\.git|\\.gitignore|README\\.md|pnpm-lock\\.yaml|pnpm-workspace\\.yaml)($|/)' && cd dist && ditto -c -k --sequesterRsrc --keepParent \"Student Batch Mailer-darwin-arm64/Student Batch Mailer.app\" \"Student Batch Mailer-mac.zip\""
   },
   "keywords": [],
   "author": "",
