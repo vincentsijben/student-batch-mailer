@@ -645,6 +645,11 @@ function formatDuration(ms) {
   return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
 }
 
+// Shown in the header and window title, so you can see at a glance which build is running.
+ipcMain.handle('get-app-info', async () => {
+  return { version: app.getVersion(), electron: process.versions.electron };
+});
+
 ipcMain.handle('get-log-status', async () => {
   return { success: true, hasEntries: hasSentLogs() };
 });

@@ -171,6 +171,21 @@ function hideProgress() {
   clearTimeout(progressHideTimer);
   document.getElementById('send-progress').hidden = true;
 }
+showAppVersion();
+
+async function showAppVersion() {
+  try {
+    const { version, electron } = await window.electronAPI.getAppInfo();
+    const badge = document.getElementById('app-version');
+    badge.textContent = `v${version}`;
+    badge.title = `Version ${version} · Electron ${electron}`;
+    badge.hidden = false;
+    document.title = `Student Batch Mailer ${version}`;
+  } catch (error) {
+    console.warn('Unable to read app version', error);
+  }
+}
+
 loadTemplates()
   .catch((error) => {
     console.error('Initial template load failed:', error);

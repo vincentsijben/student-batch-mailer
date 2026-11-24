@@ -19,8 +19,8 @@ importers:
         specifier: ^20.3.0
         version: 20.3.0
       electron:
-        specifier: ^44.11.5
-        version: 44.11.5
+        specifier: ^45.4.1
+        version: 45.4.1
 
 packages:
 
@@ -242,8 +242,8 @@ packages:
   duplexer2@0.1.4:
     resolution: {integrity: sha512-asLFVfWWtJ90ZyOUHMqk7/S2w2guQKxUI2itj3d92ADHhxUSbCMGi1f1cBcJ7xM1To+pE/Khbwo1yuNbMEPKeA==}
 
-  electron@44.11.5:
-    resolution: {integrity: sha512-FgtBBAgWRyT/k2LbXDvlnHQRtc35sfp4UaWjYvktsh2HWWYSnfA/DnYGEOxQUZXpcp4EELj37x5zSSrh585nwg==}
+  electron@45.4.1:
+    resolution: {integrity: sha512-DjsJ/eQhovkjf1vYFFyh5GB8NMx+L5bdYaonvGOlWselg3DQ0fwIF0N/+2hrPsoS4whmmNswh21ym/8dgt1y5Q==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -1187,7 +1187,7 @@ snapshots:
     dependencies:
       readable-stream: 2.3.8
 
-  electron@44.11.5:
+  electron@45.4.1:
     dependencies:
       '@electron-internal/extract-zip': 1.0.8
       '@electron/get': 5.1.0

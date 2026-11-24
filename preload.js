@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   parseExcel: (arrayBuffer) => ipcRenderer.invoke('parse-excel', arrayBuffer),
   sendEmails: (payload) => ipcRenderer.invoke('send-emails', payload),
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   getLogStatus: () => ipcRenderer.invoke('get-log-status'),
   openSentLogs: () => ipcRenderer.invoke('open-sent-logs'),
   listTemplates: () => ipcRenderer.invoke('list-templates'),

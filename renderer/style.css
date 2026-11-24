@@ -53,6 +53,23 @@ h1 {
   margin: 0 0 4px;
 }
 
+.app-version {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.app-version[hidden] {
+  display: none;
+}
+
 .tagline {
   margin: 0;
   color: var(--muted);
