@@ -6,3 +6,7 @@ sample-set/
 # Icon build intermediates
 build/icon-1024.png
 build/icon.iconset/
+
+# This project uses pnpm (pnpm-lock.yaml); ignore npm/yarn lockfiles
+package-lock.json
+yarn.lock
